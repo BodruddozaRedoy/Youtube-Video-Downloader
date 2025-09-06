@@ -18,7 +18,9 @@
     .muted { color:#9fb3c8; font-size:13px; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
     .banner { background:#2a3340; border:1px solid #3c4858; padding:10px 12px; border-radius:10px; margin-bottom:12px; }
-    .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+    .footer { max-width:820px; margin: 20px auto 0; padding: 12px 16px; color: #9fb3c8; font-size: 13px; text-align: center; }
+    .footer a { color: #66fcf1; text-decoration: none; }
+    .footer a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
@@ -30,7 +32,11 @@
       Install ffmpeg for highest quality and MP3 conversion.
     </div>
 
-    <form id="form" enctype="multipart/form-data">
+    <div id="cookiesBanner" class="banner muted" style="display:none;">
+      Server cookies detected — sign-in/age-restricted videos should work automatically.
+    </div>
+
+    <form id="form">
       <label for="url">YouTube link</label>
       <input id="url" name="url" type="text" placeholder="https://www.youtube.com/watch?v=..." required />
 
@@ -41,24 +47,17 @@
         <label><input type="radio" name="mode" value="audio" /> Audio-only (MP3 if ffmpeg; else M4A/WEBM)</label>
       </div>
 
-      <label for="cookies">Optional: cookies.txt (Netscape format)</label>
-      <div class="row">
-        <input id="cookies" name="cookies" type="file" accept=".txt" />
-        <span class="muted">Needed for age-restricted/private videos or when YouTube asks to sign in.</span>
-      </div>
-
       <button type="submit">Start Download</button>
     </form>
 
     <div id="status" class="muted" style="margin-top:16px;">Idle</div>
     <div class="bar"><div id="fill" class="fill"></div></div>
     <div id="details" class="muted mono" style="margin-top:8px;"></div>
-
-    <p class="muted" style="margin-top:16px;">
-      <b>How to get cookies.txt:</b> In Chrome/Edge, install a “Get cookies.txt” extension and export
-      your YouTube cookies in <u>Netscape</u> format while logged in. Keep this file private.
-    </p>
   </div>
+
+  <footer class="footer">
+    Developed by <a href="{{ dev_url }}" target="_blank" rel="noopener">{{ dev_name }}</a>
+  </footer>
 
   <script>
     const form = document.getElementById("form");
@@ -66,6 +65,7 @@
     const fillEl = document.getElementById("fill");
     const detailsEl = document.getElementById("details");
     const ffmpegBanner = document.getElementById("ffmpegBanner");
+    const cookiesBanner = document.getElementById("cookiesBanner");
 
     let timer = null;
     let currentJob = null;
@@ -84,12 +84,13 @@
       return `${m}m ${s}s`;
     }
 
-    async function checkFFmpeg() {
+    async function checkRuntime() {
       try {
         const res = await fetch("/ffmpeg");
         const data = await res.json();
-        if (data && data.ok && !data.ffmpeg) {
-          ffmpegBanner.style.display = "block";
+        if (data && data.ok) {
+          if (!data.ffmpeg) ffmpegBanner.style.display = "block";
+          if (data.cookies) cookiesBanner.style.display = "block";
         }
       } catch (_) {}
     }
@@ -141,7 +142,7 @@
       poll(currentJob);
     });
 
-    checkFFmpeg();
+    checkRuntime();
   </script>
 </body>
 </html>

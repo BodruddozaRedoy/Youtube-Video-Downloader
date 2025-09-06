@@ -13,8 +13,20 @@ from yt_dlp import YoutubeDL, DownloadError
 app = Flask(__name__)
 app.secret_key = "dev"  # change in production
 
+# Branding (your credit)
+DEV_NAME = os.environ.get("DEV_NAME", "bodruddozaredoy")
+DEV_URL  = os.environ.get("DEV_URL",  "https://www.devredoy.com/")
+
+# Optional: path to a server-side cookies.txt (Netscape format)
+# e.g., set COOKIES_FILE=/cookies/cookies.txt and mount that file in Docker
+COOKIES_FILE = os.environ.get("COOKIES_FILE")  # file path or None
+
+# Optional: YouTube client selection to reduce friction on some videos
+# Comma-separated list. Common picks: android,web,ios
+YTDLP_PLAYER_CLIENT = os.environ.get("YTDLP_PLAYER_CLIENT", "android,web")
+
 # In-memory progress state
-PROGRESS = {}  # job_id -> dict(status, percent, speed, eta, msg, tmpdir, final_path, error, filename, cookiefile, cookiedir)
+PROGRESS = {}  # job_id -> dict(status, percent, speed, eta, msg, tmpdir, final_path, error, filename)
 
 
 # ---------- Utilities ----------
@@ -47,8 +59,6 @@ def make_job() -> str:
         "final_path": None,
         "filename": None,
         "error": None,
-        "cookiefile": None,
-        "cookiedir": None,
     }
     return job_id
 
@@ -63,7 +73,7 @@ def build_opts(tmpdir: str, mode: str, job_id: str) -> dict:
     """
     ff = have_ffmpeg()
     ff_loc = os.environ.get("FFMPEG_LOCATION")  # optional
-    cookiefile = PROGRESS.get(job_id, {}).get("cookiefile")
+    player_clients = [c.strip() for c in YTDLP_PLAYER_CLIENT.split(",") if c.strip()]
 
     def hook(d):
         job = PROGRESS.get(job_id)
@@ -91,11 +101,13 @@ def build_opts(tmpdir: str, mode: str, job_id: str) -> dict:
         "progress_hooks": [hook],
         "quiet": True,
         "noprogress": True,
+        "extractor_args": {"youtube": {"player_client": player_clients}},
     }
     if ff_loc:
         ydl_opts["ffmpeg_location"] = ff_loc  # tell yt-dlp where ffmpeg/ffprobe are
-    if cookiefile:
-        ydl_opts["cookiefile"] = cookiefile   # pass uploaded cookies to yt-dlp
+    # If a server-side cookies file exists, use it automatically (users won't be asked)
+    if COOKIES_FILE and os.path.exists(COOKIES_FILE):
+        ydl_opts["cookiefile"] = COOKIES_FILE
 
     if mode == "audio":
         if ff:
@@ -179,17 +191,18 @@ def download_worker(url: str, mode: str, job_id: str):
 
 @app.route("/", methods=["GET"])
 def index():
-    return render_template("index.html")
+    # Pass branding to template
+    return render_template("index.html", dev_name=DEV_NAME, dev_url=DEV_URL)
 
 
 @app.route("/ffmpeg", methods=["GET"])
 def ffmpeg_status():
-    return jsonify({"ok": True, "ffmpeg": have_ffmpeg()})
+    return jsonify({"ok": True, "ffmpeg": have_ffmpeg(), "cookies": bool(COOKIES_FILE and os.path.exists(COOKIES_FILE))})
 
 
 @app.route("/start", methods=["POST"])
 def start():
-    # Accept form-data (file upload) or JSON
+    # Users only send URL + mode. Cookies (if any) are server-side and automatic.
     data = request.form or request.json or {}
     url = (data.get("url") or "").strip()
     mode = (data.get("mode") or "best").strip()
@@ -197,16 +210,6 @@ def start():
         return jsonify({"ok": False, "error": "No URL"}), 400
 
     job_id = make_job()
-
-    # If a cookies.txt file was uploaded, save it for this job
-    file = request.files.get("cookies")
-    if file and file.filename:
-        cookiedir = tempfile.mkdtemp(prefix=f"yt_cookie_{job_id}_")
-        cookiefile = os.path.join(cookiedir, "cookies.txt")
-        file.save(cookiefile)
-        PROGRESS[job_id]["cookiedir"] = cookiedir
-        PROGRESS[job_id]["cookiefile"] = cookiefile
-
     threading.Thread(target=download_worker, args=(url, mode, job_id), daemon=True).start()
     return jsonify({"ok": True, "job_id": job_id})
 
@@ -238,7 +241,6 @@ def fetch(job_id: str):
 
     final_path = job["final_path"]
     tmpdir = job["tmpdir"]
-    cookiedir = job.get("cookiedir")
     filename = os.path.basename(final_path)
 
     @after_this_request
@@ -247,11 +249,6 @@ def fetch(job_id: str):
             shutil.rmtree(tmpdir, ignore_errors=True)
         except Exception:
             pass
-        if cookiedir:
-            try:
-                shutil.rmtree(cookiedir, ignore_errors=True)
-            except Exception:
-                pass
         PROGRESS.pop(job_id, None)  # free memory
         return resp
 
@@ -259,6 +256,6 @@ def fetch(job_id: str):
 
 
 if __name__ == "__main__":
-    # For local dev
+    # For local dev / Docker / PaaS
     port = int(os.environ.get("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=True)
