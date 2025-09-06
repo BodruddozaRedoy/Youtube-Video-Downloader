@@ -1,0 +1,135 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>YouTube Downloader</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { color-scheme: dark; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin:40px; background:#0b0c10; color:#eaf0f1; }
+    .card { max-width:720px; margin:0 auto; background:#1f2833; padding:24px; border-radius:16px; }
+    label { display:block; font-weight:600; margin:16px 0 8px; }
+    input[type="text"] { width:100%; padding:12px; border-radius:10px; border:1px solid #3c4858; background:#0b1320; color:#eaf0f1; }
+    .radio { display:flex; gap:16px; flex-wrap:wrap; margin-top:8px; }
+    .radio label { font-weight:500; display:flex; align-items:center; gap:8px; }
+    button { margin-top:16px; padding:12px 18px; border:none; border-radius:12px; cursor:pointer; background:#45a29e; color:#0b0c10; font-weight:700; }
+    .bar { height:14px; background:#0b1320; border-radius:999px; overflow:hidden; margin-top:16px; border:1px solid #3c4858; }
+    .fill { height:100%; width:0%; background:#66fcf1; transition: width .2s ease; }
+    .muted { color:#9fb3c8; font-size:13px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .banner { background:#2a3340; border:1px solid #3c4858; padding:10px 12px; border-radius:10px; margin-bottom:12px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>🎬 YouTube Downloader</h1>
+
+    <div id="ffmpegBanner" class="banner muted" style="display:none;">
+      ffmpeg not detected — “Best” will fall back to progressive MP4; “Audio” will download as M4A/WEBM.
+      Install ffmpeg for highest quality and MP3 conversion.
+    </div>
+
+    <form id="form">
+      <label for="url">YouTube link</label>
+      <input id="url" name="url" type="text" placeholder="https://www.youtube.com/watch?v=..." required />
+
+      <label>Quality / Mode</label>
+      <div class="radio">
+        <label><input type="radio" name="mode" value="best" checked /> Best (highest; needs ffmpeg)</label>
+        <label><input type="radio" name="mode" value="progressive" /> Progressive MP4 (≤1080p, no ffmpeg)</label>
+        <label><input type="radio" name="mode" value="audio" /> Audio-only (MP3 if ffmpeg; else M4A/WEBM)</label>
+      </div>
+
+      <button type="submit">Start Download</button>
+    </form>
+
+    <div id="status" class="muted" style="margin-top:16px;">Idle</div>
+    <div class="bar"><div id="fill" class="fill"></div></div>
+    <div id="details" class="muted mono" style="margin-top:8px;"></div>
+  </div>
+
+  <script>
+    const form = document.getElementById("form");
+    const statusEl = document.getElementById("status");
+    const fillEl = document.getElementById("fill");
+    const detailsEl = document.getElementById("details");
+    const ffmpegBanner = document.getElementById("ffmpegBanner");
+
+    let timer = null;
+    let currentJob = null;
+
+    function humanBytes(bps) {
+      if (!bps) return "";
+      const units = ["B/s","KB/s","MB/s","GB/s","TB/s"];
+      let i = 0, x = bps;
+      while (x >= 1024 && i < units.length-1) { x /= 1024; i++; }
+      return x.toFixed(1) + " " + units[i];
+    }
+
+    function humanTime(sec) {
+      if (sec == null) return "";
+      const m = Math.floor(sec/60), s = Math.floor(sec%60);
+      return `${m}m ${s}s`;
+    }
+
+    async function checkFFmpeg() {
+      try {
+        const res = await fetch("/ffmpeg");
+        const data = await res.json();
+        if (data && data.ok && !data.ffmpeg) {
+          ffmpegBanner.style.display = "block";
+        }
+      } catch (_) {}
+    }
+
+    async function poll(job) {
+      try {
+        const res = await fetch(`/progress/${job}`);
+        const data = await res.json();
+        if (!data.ok) {
+          statusEl.textContent = "Error: " + (data.error || "unknown");
+          clearInterval(timer); return;
+        }
+        statusEl.textContent = `${data.status.toUpperCase()} — ${data.msg || ""}`;
+        fillEl.style.width = (data.percent || 0) + "%";
+        const speedTxt = data.speed ? ` | ${humanBytes(data.speed)}` : "";
+        const etaTxt = (data.eta != null) ? ` | ETA ${humanTime(data.eta)}` : "";
+        detailsEl.textContent = `${(data.percent ?? 0).toFixed(2)}%${speedTxt}${etaTxt}`;
+
+        if (data.status === "finished") {
+          clearInterval(timer);
+          // Trigger browser download
+          window.location = `/fetch/${job}`;
+          statusEl.textContent = "Preparing download...";
+        } else if (data.status === "error") {
+          clearInterval(timer);
+          statusEl.textContent = "Error: " + (data.error || "Unknown error");
+        }
+      } catch (e) {
+        // transient poll error; ignore and keep polling
+      }
+    }
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (timer) { clearInterval(timer); timer = null; }
+      fillEl.style.width = "0%";
+      detailsEl.textContent = "";
+      statusEl.textContent = "Starting...";
+
+      const formData = new FormData(form);
+      const res = await fetch("/start", { method: "POST", body: formData });
+      const data = await res.json();
+      if (!data.ok) {
+        statusEl.textContent = "Error: " + (data.error || "unknown");
+        return;
+      }
+      currentJob = data.job_id;
+      timer = setInterval(() => poll(currentJob), 600);
+      poll(currentJob);
+    });
+
+    checkFFmpeg();
+  </script>
+</body>
+</html>
