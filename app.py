@@ -21,6 +21,15 @@ DEV_URL  = os.environ.get("DEV_URL",  "https://www.devredoy.com/")
 # e.g., set COOKIES_FILE=/cookies/cookies.txt and mount that file in Docker
 COOKIES_FILE = os.environ.get("COOKIES_FILE")  # file path or None
 
+# Optional: read cookies directly from a local browser profile when running
+# the app on your desktop (not in Docker). Example values:
+#   COOKIES_FROM_BROWSER=chrome
+#   COOKIES_FROM_BROWSER=chrome:Default
+#   COOKIES_FROM_BROWSER=edge:Default
+#   COOKIES_FROM_BROWSER=firefox:default-release
+# This maps to yt-dlp's --cookies-from-browser.
+COOKIES_FROM_BROWSER = os.environ.get("COOKIES_FROM_BROWSER")  # e.g., "chrome:Default"
+
 # Auto-detect a local cookies file next to app.py if env var not set
 if not COOKIES_FILE:
     here = os.path.dirname(os.path.abspath(__file__))
@@ -117,6 +126,26 @@ def build_opts(tmpdir: str, mode: str, job_id: str) -> dict:
     # If a server-side cookies file exists, use it automatically (users won't be asked)
     if COOKIES_FILE and os.path.exists(COOKIES_FILE):
         ydl_opts["cookiefile"] = COOKIES_FILE
+    # If configured, read cookies directly from a local browser profile
+    # Only makes sense when running natively on the same machine as the browser
+    elif COOKIES_FROM_BROWSER:
+        # Accept formats like "chrome", "chrome:Default", "firefox:default-release", "edge:Default"
+        # Map to yt-dlp option 'cookiesfrombrowser': (browser, profile, keyring, container)
+        try:
+            raw = COOKIES_FROM_BROWSER.strip()
+            # Support optional container/keyring later if needed
+            # For now parse as <browser>[:<profile>]
+            if ":" in raw:
+                browser, profile = raw.split(":", 1)
+            else:
+                browser, profile = raw, None
+            browser = (browser or "").strip() or None
+            profile = (profile or "").strip() or None
+            if browser:
+                ydl_opts["cookiesfrombrowser"] = (browser, profile, None, None)
+        except Exception:
+            # Ignore parsing errors and proceed without browser cookies
+            pass
 
     if mode == "audio":
         if ff:
@@ -206,7 +235,16 @@ def index():
 
 @app.route("/ffmpeg", methods=["GET"])
 def ffmpeg_status():
-    return jsonify({"ok": True, "ffmpeg": have_ffmpeg(), "cookies": bool(COOKIES_FILE and os.path.exists(COOKIES_FILE))})
+    cookies_file_ok = bool(COOKIES_FILE and os.path.exists(COOKIES_FILE))
+    cookies_method = (
+        "file" if cookies_file_ok else ("browser" if COOKIES_FROM_BROWSER else "none")
+    )
+    return jsonify({
+        "ok": True,
+        "ffmpeg": have_ffmpeg(),
+        "cookies": cookies_file_ok or bool(COOKIES_FROM_BROWSER),
+        "cookies_method": cookies_method,
+    })
 
 
 @app.route("/start", methods=["POST"])
