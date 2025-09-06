@@ -21,6 +21,15 @@ DEV_URL  = os.environ.get("DEV_URL",  "https://www.devredoy.com/")
 # e.g., set COOKIES_FILE=/cookies/cookies.txt and mount that file in Docker
 COOKIES_FILE = os.environ.get("COOKIES_FILE")  # file path or None
 
+# Auto-detect a local cookies file next to app.py if env var not set
+if not COOKIES_FILE:
+    here = os.path.dirname(os.path.abspath(__file__))
+    for name in ("cookies.txt", "cookie.txt", "cookie"):
+        cand = os.path.join(here, name)
+        if os.path.exists(cand):
+            COOKIES_FILE = cand
+            break
+
 # Optional: YouTube client selection to reduce friction on some videos
 # Comma-separated list. Common picks: android,web,ios
 YTDLP_PLAYER_CLIENT = os.environ.get("YTDLP_PLAYER_CLIENT", "android,web")
