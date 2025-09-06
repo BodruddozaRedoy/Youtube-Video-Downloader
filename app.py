@@ -14,7 +14,7 @@ app = Flask(__name__)
 app.secret_key = "dev"  # change in production
 
 # In-memory progress state
-PROGRESS = {}  # job_id -> dict(status, percent, speed, eta, msg, tmpdir, final_path, error, filename)
+PROGRESS = {}  # job_id -> dict(status, percent, speed, eta, msg, tmpdir, final_path, error, filename, cookiefile, cookiedir)
 
 
 # ---------- Utilities ----------
@@ -29,7 +29,7 @@ def have_ffmpeg() -> bool:
             fp = os.path.join(loc, "ffprobe")
             return os.path.exists(ff) and os.path.exists(fp)
         else:
-            # If pointing to ffmpeg binary, assume ffprobe sits alongside or in PATH
+            # If pointing to ffmpeg binary, assume ffprobe sits alongside or is in PATH
             return os.path.exists(loc)
     # Fallback: PATH lookup
     return bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
@@ -47,6 +47,8 @@ def make_job() -> str:
         "final_path": None,
         "filename": None,
         "error": None,
+        "cookiefile": None,
+        "cookiedir": None,
     }
     return job_id
 
@@ -61,6 +63,7 @@ def build_opts(tmpdir: str, mode: str, job_id: str) -> dict:
     """
     ff = have_ffmpeg()
     ff_loc = os.environ.get("FFMPEG_LOCATION")  # optional
+    cookiefile = PROGRESS.get(job_id, {}).get("cookiefile")
 
     def hook(d):
         job = PROGRESS.get(job_id)
@@ -91,6 +94,8 @@ def build_opts(tmpdir: str, mode: str, job_id: str) -> dict:
     }
     if ff_loc:
         ydl_opts["ffmpeg_location"] = ff_loc  # tell yt-dlp where ffmpeg/ffprobe are
+    if cookiefile:
+        ydl_opts["cookiefile"] = cookiefile   # pass uploaded cookies to yt-dlp
 
     if mode == "audio":
         if ff:
@@ -184,6 +189,7 @@ def ffmpeg_status():
 
 @app.route("/start", methods=["POST"])
 def start():
+    # Accept form-data (file upload) or JSON
     data = request.form or request.json or {}
     url = (data.get("url") or "").strip()
     mode = (data.get("mode") or "best").strip()
@@ -191,6 +197,16 @@ def start():
         return jsonify({"ok": False, "error": "No URL"}), 400
 
     job_id = make_job()
+
+    # If a cookies.txt file was uploaded, save it for this job
+    file = request.files.get("cookies")
+    if file and file.filename:
+        cookiedir = tempfile.mkdtemp(prefix=f"yt_cookie_{job_id}_")
+        cookiefile = os.path.join(cookiedir, "cookies.txt")
+        file.save(cookiefile)
+        PROGRESS[job_id]["cookiedir"] = cookiedir
+        PROGRESS[job_id]["cookiefile"] = cookiefile
+
     threading.Thread(target=download_worker, args=(url, mode, job_id), daemon=True).start()
     return jsonify({"ok": True, "job_id": job_id})
 
@@ -222,6 +238,7 @@ def fetch(job_id: str):
 
     final_path = job["final_path"]
     tmpdir = job["tmpdir"]
+    cookiedir = job.get("cookiedir")
     filename = os.path.basename(final_path)
 
     @after_this_request
@@ -230,6 +247,11 @@ def fetch(job_id: str):
             shutil.rmtree(tmpdir, ignore_errors=True)
         except Exception:
             pass
+        if cookiedir:
+            try:
+                shutil.rmtree(cookiedir, ignore_errors=True)
+            except Exception:
+                pass
         PROGRESS.pop(job_id, None)  # free memory
         return resp
 
